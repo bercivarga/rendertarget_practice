@@ -1,5 +1,5 @@
 import { useFBO, PerspectiveCamera as DPerCam, OrthographicCamera } from "@react-three/drei";
-import { Canvas, createPortal, useFrame } from "@react-three/fiber";
+import { Canvas, createPortal, useFrame, useThree } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import { PerspectiveCamera, Scene, Color, ShaderMaterial, Mesh } from "three";
 
@@ -93,6 +93,7 @@ const noiseFrag = `
   const vec3 yellow = vec3(1., 1., 0.);
   const vec3 seagreen = vec3(0.18, 0.55, 0.34);
   const vec3 hotpink = vec3(1., 0.41, 0.71);
+  const vec3 black = vec3(0., 0., 0.);
 
   void main() {
     vec2 uv = vUv * 10.0 - 1.0;
@@ -117,24 +118,42 @@ const pixelationFragment = `
   uniform vec2 uResolution;
   uniform float uTime;
   uniform sampler2D uTexture;
+  uniform vec2 uMouse;
 
   varying vec2 vUv;
 
-  const float pixelSize = 0.05;
+  const float pixelSize = 0.03;
+  const vec2 maskSize = vec2(0.04);
+
+  vec2 map(vec2 value, vec2 min1, vec2 max1, vec2 min2, vec2 max2) {
+    return min2 + (value - min1) * (max2 - min2) / (max1 - min1);
+  }
 
   void main() {
     vec2 uv = vUv;
 
+    vec2 mousePos = map(uMouse, vec2(-1.0), vec2(1.0), vec2(0.0), vec2(1.0));
+
+    // Calculate the distance from the current fragment to the mouse position, taking into account the rectangle mask
+    vec2 maskCenter = mousePos;
+    vec2 maskedUv = abs(uv - maskCenter) - maskSize * 0.5;
+    float distance = max(maskedUv.x, maskedUv.y);
+    
     // Calculate the size of each pixel in texture coordinates
     vec2 pixelTexCoord = vec2(pixelSize, pixelSize);
 
     // Calculate the position of the current fragment in texture coordinates
     vec2 roundedTexCoord = floor(uv / pixelTexCoord) * pixelTexCoord;
 
-    // Sample the texture using the rounded texture coordinates
-    vec4 sampledColor = texture2D(uTexture, roundedTexCoord);
+    if (distance < 0.0) { // Use a threshold of 0.0 for the rectangle mask
+      // Sample the texture using the rounded texture coordinates
+      vec4 sampledColor = texture2D(uTexture, roundedTexCoord);
 
-    gl_FragColor = sampledColor;
+      gl_FragColor = sampledColor;
+    } else {
+      vec4 originalColor = texture2D(uTexture, uv);
+      gl_FragColor = originalColor;
+    }
   }
 `;
 
@@ -148,26 +167,37 @@ function View() {
 
   const renderTarget = useFBO();
 
-  const shaderRef = useRef<ShaderMaterial>(null);
+  const noiseShaderRef = useRef<ShaderMaterial>(null);
+  const pixelationShaderRef = useRef<ShaderMaterial>(null);
 
   const displayRef = useRef<Mesh>(null);
 
-  useFrame(( { gl, clock } ) => {
+  const { getCurrentViewport } = useThree(state => state.viewport)
+
+  const { width, height } = getCurrentViewport();
+
+  const ratio = (width / height) > 1 ? width : height;
+
+  useFrame(( { gl, clock, mouse } ) => {
     if (!cam.current) return;
     gl.setRenderTarget(renderTarget);
     gl.render(scene, cam.current);
     gl.setRenderTarget(null);
 
-    if (shaderRef.current) {
-      shaderRef.current.uniforms.uTime.value = clock.getElapsedTime(); // TODO: remove * 5
-      shaderRef.current.uniforms.uResolution.value = [gl.domElement.width, gl.domElement.height];
+    if (noiseShaderRef.current) {
+      noiseShaderRef.current.uniforms.uTime.value = clock.getElapsedTime(); // TODO: remove * 5
+      noiseShaderRef.current.uniforms.uResolution.value = [gl.domElement.width, gl.domElement.height];
+    }
+
+    if (pixelationShaderRef.current) {
+      pixelationShaderRef.current.uniforms.uMouse.value = [mouse.x, mouse.y];
     }
   })
 
   return (
     <>
-      {/* <DPerCam ref={cam} position={[0, 0, 2]} makeDefault /> */}
-      <OrthographicCamera
+      <DPerCam ref={cam} position={[0, 0, 2]} makeDefault />
+      {/* <OrthographicCamera
         ref={cam}
         makeDefault
         zoom={2}
@@ -178,20 +208,25 @@ function View() {
         near={0.1}
         far={1000}
         position={[0, 0, 1]}
-      />
+      /> */}
       {createPortal(
         <>
           <mesh scale={[2.7, 2, 1]}>
             <planeBufferGeometry />
-            <shaderMaterial ref={shaderRef} fragmentShader={noiseFrag} vertexShader={noiseVert} uniforms={{ uTime: { value: 0 }, uResolution: { value: [1, 1] } }} />
+            <shaderMaterial ref={noiseShaderRef} fragmentShader={noiseFrag} vertexShader={noiseVert} uniforms={{ uTime: { value: 0 }, uResolution: { value: [1, 1] } }} />
           </mesh>
         </>,
         scene
       )}
 
-      <mesh ref={displayRef}>
+      <mesh ref={displayRef} scale={[ratio, ratio, 1]}>
         <planeBufferGeometry />
-        <shaderMaterial fragmentShader={pixelationFragment} vertexShader={noiseVert} uniforms={{ uTexture: { value: renderTarget.texture } }} />
+        <shaderMaterial
+          ref={pixelationShaderRef}
+          fragmentShader={pixelationFragment}
+          vertexShader={noiseVert}
+          uniforms={{ uTexture: { value: renderTarget.texture }, uMouse: { value: [0, 0] } }}
+        />
         {/* <meshBasicMaterial map={renderTarget.texture} /> */}
       </mesh>
     </>
