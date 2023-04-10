@@ -1,4 +1,4 @@
-import { useFBO, PerspectiveCamera as DPerCam, TorusKnot } from "@react-three/drei";
+import { useFBO, PerspectiveCamera as DPerCam, OrthographicCamera } from "@react-three/drei";
 import { Canvas, createPortal, useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import { PerspectiveCamera, Scene, Color, ShaderMaterial, Mesh } from "three";
@@ -89,13 +89,17 @@ const noiseFrag = `
 
   const vec3 red = vec3(1., 0., 0.);
   const vec3 blue = vec3(0., 1., 1.);
+  const vec3 violet = vec3(0.5, 0., 1.);
+  const vec3 yellow = vec3(1., 1., 0.);
+  const vec3 seagreen = vec3(0.18, 0.55, 0.34);
+  const vec3 hotpink = vec3(1., 0.41, 0.71);
 
   void main() {
-    vec2 uv = vUv;
+    vec2 uv = vUv * 10.0 - 1.0;
 
-    float f = cnoise(vec3(uv, uTime * 0.1));
+    float f = cnoise(vec3(uv, uTime * 0.5));
 
-    vec3 color = mix(red, blue, f);
+    vec3 color = mix(hotpink, violet, f);
 
     gl_FragColor = vec4(color, 1.0);
   }
@@ -109,13 +113,39 @@ const noiseVert = `
   }
 `;
 
+const pixelationFragment = `
+  uniform vec2 uResolution;
+  uniform float uTime;
+  uniform sampler2D uTexture;
+
+  varying vec2 vUv;
+
+  const float pixelSize = 0.05;
+
+  void main() {
+    vec2 uv = vUv;
+
+    // Calculate the size of each pixel in texture coordinates
+    vec2 pixelTexCoord = vec2(pixelSize, pixelSize);
+
+    // Calculate the position of the current fragment in texture coordinates
+    vec2 roundedTexCoord = floor(uv / pixelTexCoord) * pixelTexCoord;
+
+    // Sample the texture using the rounded texture coordinates
+    vec4 sampledColor = texture2D(uTexture, roundedTexCoord);
+
+    gl_FragColor = sampledColor;
+  }
+`;
+
 function View() {
   const cam = useRef<PerspectiveCamera>();
   const scene = useMemo(() => {
     const myScene = new Scene();
-    myScene.background = new Color("blueviolet");
+    myScene.background = new Color("green");
     return myScene;
   }, []);
+
   const renderTarget = useFBO();
 
   const shaderRef = useRef<ShaderMaterial>(null);
@@ -129,23 +159,29 @@ function View() {
     gl.setRenderTarget(null);
 
     if (shaderRef.current) {
-      shaderRef.current.uniforms.uTime.value = clock.getElapsedTime();
+      shaderRef.current.uniforms.uTime.value = clock.getElapsedTime(); // TODO: remove * 5
       shaderRef.current.uniforms.uResolution.value = [gl.domElement.width, gl.domElement.height];
-    }
-
-    if (displayRef.current) {
-      displayRef.current.rotation.x += 0.01;
-      displayRef.current.rotation.y += 0.01;
     }
   })
 
   return (
     <>
-      <DPerCam position={[0, 0, 3]} makeDefault />
+      {/* <DPerCam ref={cam} position={[0, 0, 2]} makeDefault /> */}
+      <OrthographicCamera
+        ref={cam}
+        makeDefault
+        zoom={2}
+        left={-1}
+        right={1}
+        top={1}
+        bottom={-1}
+        near={0.1}
+        far={1000}
+        position={[0, 0, 1]}
+      />
       {createPortal(
         <>
-        <DPerCam ref={cam} position={[0, 0, 2]} makeDefault />
-          <mesh scale={2.8}>
+          <mesh scale={[2.7, 2, 1]}>
             <planeBufferGeometry />
             <shaderMaterial ref={shaderRef} fragmentShader={noiseFrag} vertexShader={noiseVert} uniforms={{ uTime: { value: 0 }, uResolution: { value: [1, 1] } }} />
           </mesh>
@@ -154,8 +190,9 @@ function View() {
       )}
 
       <mesh ref={displayRef}>
-        <boxBufferGeometry />
-        <meshBasicMaterial map={renderTarget.texture} />
+        <planeBufferGeometry />
+        <shaderMaterial fragmentShader={pixelationFragment} vertexShader={noiseVert} uniforms={{ uTexture: { value: renderTarget.texture } }} />
+        {/* <meshBasicMaterial map={renderTarget.texture} /> */}
       </mesh>
     </>
   )
